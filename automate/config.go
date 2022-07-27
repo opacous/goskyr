@@ -22,7 +22,7 @@ func selectorToPath(s string) []string {
 	return strings.Split(s, " > ")
 }
 
-func elementsToConfig(s *scraper.Scraper, l ...scraper.ElementLocation) {
+func elementsToConfig(s *scraper.Element, l ...scraper.ElementLocation) {
 	var itemSelector string
 outer:
 	for i := 0; ; i++ {
@@ -42,19 +42,19 @@ outer:
 			}
 		}
 	}
-	s.Item = itemSelector
+	s.ElementLocation.Selector = itemSelector
 	for i, e := range l {
 		e.Selector = strings.TrimLeft(strings.TrimPrefix(e.Selector, itemSelector), " >")
-		d := scraper.DynamicField{
+		d := scraper.Element{
 			Name:            fmt.Sprintf("field-%d", i),
 			Type:            "text",
 			ElementLocation: e,
 		}
-		s.Fields.Dynamic = append(s.Fields.Dynamic, d)
+		s.Fields.Element = append(s.Fields.Element, d)
 	}
 }
 
-func GetDynamicFieldsConfig(s *scraper.Scraper, minOcc int) error {
+func GetDynamicFieldsConfig(s *scraper.Element, minOcc int) error {
 	if s.URL == "" {
 		return errors.New("URL field cannot be empty")
 	}

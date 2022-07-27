@@ -1,0 +1,51 @@
+{
+    "_id": "amazon",
+    "startUrl": [
+        "https://www.amazon.com/s?rh=n%3A16225016011&fs=true&ref=lp_16225016011_sar"
+    ],
+    "selectors": [
+        {
+            "id": "items",
+            "parentSelectors": [
+                "_root",
+                "pagina"
+            ],
+            "type": "SelectorElement",
+            "selector": ".sg-col-8-of-16 > div",
+            "multiple": true,
+            "delay": 0
+        },
+        {
+            "id": "pagina",
+            "parentSelectors": [
+                "_root",
+                "pagina"
+            ],
+            "paginationType": "clickMore",
+            "selector": "a.s-pagination-next",
+            "type": "SelectorPagination"
+        },
+        {
+            "id": "title",
+            "parentSelectors": [
+                "items"
+            ],
+            "type": "SelectorText",
+            "selector": "span.a-size-medium",
+            "multiple": false,
+            "delay": 0,
+            "regex": ""
+        },
+        {
+            "id": "price",
+            "parentSelectors": [
+                "items"
+            ],
+            "type": "SelectorText",
+            "selector": "span.a-price-whole",
+            "multiple": false,
+            "delay": 0,
+            "regex": ""
+        }
+    ]
+}

@@ -6,20 +6,18 @@ import (
 	"log"
 	"sync"
 
-	"github.com/jakopako/goskyr/automate"
 	"github.com/jakopako/goskyr/output"
 	"github.com/jakopako/goskyr/scraper"
-	"gopkg.in/yaml.v3"
 )
 
 var version = "dev"
 
-func runScraper(s scraper.Scraper, itemsChannel chan map[string]interface{}, globalConfig *scraper.GlobalConfig, wg *sync.WaitGroup) {
+func runScraper(s scraper.Element, itemsChannel chan map[string]interface{}, globalConfig *scraper.GlobalConfig, wg *sync.WaitGroup) {
 	defer wg.Done()
 	log.Printf("crawling %s\n", s.Name)
 	// This could probably be improved. We could pass the channel to
 	// GetItems instead of waiting for the scraper to finish.
-	items, err := s.GetItems(globalConfig)
+	items, err := s.CallRecursiveElements(globalConfig, "")
 	if err != nil {
 		log.Printf("%s ERROR: %s", s.Name, err)
 		return
@@ -36,8 +34,9 @@ func main() {
 	configFile := flag.String("config", "./config.yml", "The location of the configuration file.")
 	printVersion := flag.Bool("version", false, "The version of goskyr.")
 	// add flag to pass min nr of items for the generate flag.
-	generateConfig := flag.String("generate", "", "Needs an additional argument of the url whose config needs to be generated.")
-	m := flag.Int("min", 20, "The minimum number of events on a page. This is needed to filter out noise.")
+	// #TODO: Temporarily disabled generateConfig
+	// generateConfig := flag.String("generate", "", "Needs an additional argument of the url whose config needs to be generated.")
+	// m := flag.Int("min", 20, "The minimum number of events on a page. This is needed to filter out noise.")
 
 	flag.Parse()
 
@@ -46,25 +45,25 @@ func main() {
 		return
 	}
 
-	if *generateConfig != "" {
-		s := &scraper.Scraper{URL: *generateConfig}
-		err := automate.GetDynamicFieldsConfig(s, *m)
-		if err != nil {
-			log.Fatal(err)
-		}
-		c := scraper.Config{
-			Scrapers: []scraper.Scraper{
-				*s,
-			},
-		}
-		yamlData, err := yaml.Marshal(&c)
-		if err != nil {
-			log.Fatalf("Error while Marshaling. %v", err)
-		}
+	// if *generateConfig != "" {
+	// 	s := &scraper.Element{URL: *generateConfig}
+	// 	err := automate.GetDynamicFieldsConfig(s, *m)
+	// 	if err != nil {
+	// 		log.Fatal(err)
+	// 	}
+	// 	c := scraper.Config{
+	// 		Scrapers: []scraper.Element{
+	// 			*s,
+	// 		},
+	// 	}
+	// 	yamlData, err := yaml.Marshal(&c)
+	// 	if err != nil {
+	// 		log.Fatalf("Error while Marshaling. %v", err)
+	// 	}
 
-		fmt.Println(string(yamlData))
-		return
-	}
+	// 	fmt.Println(string(yamlData))
+	// 	return
+	// }
 
 	config, err := scraper.NewConfig(*configFile)
 	if err != nil {
@@ -73,7 +72,7 @@ func main() {
 
 	var scraperWg sync.WaitGroup
 	var writerWg sync.WaitGroup
-	itemsChannel := make(chan map[string]interface{}, len(config.Scrapers))
+	itemsChannel := make(chan map[string]interface{}, len(config.Elements))
 
 	var writer output.Writer
 	if *toStdout {
@@ -91,7 +90,8 @@ func main() {
 		}
 	}
 
-	for _, s := range config.Scrapers {
+	for _, s := range config.Elements {
+		fmt.Printf("%+v\n", s)
 		if *singleScraper == "" || *singleScraper == s.Name {
 			scraperWg.Add(1)
 			go runScraper(s, itemsChannel, &config.Global, &scraperWg)
