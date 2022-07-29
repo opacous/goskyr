@@ -17,7 +17,7 @@ type Request = fetcher.Request
 func FetchUrl(url string, userAgent string) (*http.Response, error) {
 	// NOTE: body has to be closed by caller
 	// 2022.07.26 12:28 PM - Let's just get it to use baseFetcher for now.
-	fetcher := fetcher.NewFetcher("Base")
+	fetcher := fetcher.NewFetcher("Chrome")
 
 	// 1. Make Response from URL + params
 	request := Request{

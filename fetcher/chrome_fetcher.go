@@ -1,45 +1,40 @@
 package fetcher
 
-// The following code was sourced and modified from the
-// https://github.com/andrew-d/goscrape package governed by MIT license.
-
 import (
 	"context"
-	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
-	"io/ioutil"
-	"math"
 	"net/http"
+	"net/http/cookiejar"
 	"net/url"
-	"strconv"
+	neturl "net/url"
 	"strings"
 	"time"
 
-	errs "github.com/jakopako/goskyr/errors"
-	"github.com/mafredri/cdp"
-	"github.com/mafredri/cdp/devtool"
-	"github.com/mafredri/cdp/protocol/network"
-	"github.com/mafredri/cdp/protocol/page"
-	"github.com/mafredri/cdp/protocol/runtime"
-	"github.com/mafredri/cdp/rpcc"
+	// "github.com/PuerkitoBio/goquery"
+
+	"github.com/chromedp/cdproto/dom"
+	"github.com/chromedp/cdproto/network"
+	"github.com/chromedp/chromedp"
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/viper"
+	"golang.org/x/net/publicsuffix"
 )
 
-// ChromeFetcher is used to fetch Java Script rendeded pages.
+// type Fetcher interface {
+// 	Fetch(request Request) (*http.Response, error)
+// 	// #TODO: export cookies
+// 	// #TODO: import cookies
+// }
+
 type ChromeFetcher struct {
-	cdpClient *cdp.Client
-	client    *http.Client
-	cookies   []*http.Cookie
+	ctx    *context.Context
+	client *http.Client
 }
 
-// NewChromeFetcher returns ChromeFetcher
 func newChromeFetcher() *ChromeFetcher {
 	var client *http.Client
 	proxy := viper.GetString("PROXY")
-
 	if len(proxy) > 0 {
 		proxyURL, err := url.Parse(proxy)
 		if err != nil {
@@ -51,380 +46,185 @@ func newChromeFetcher() *ChromeFetcher {
 	} else {
 		client = &http.Client{}
 	}
-
 	f := &ChromeFetcher{
 		client: client,
 	}
-
+	jarOpts := &cookiejar.Options{PublicSuffixList: publicsuffix.List}
+	var err error
+	f.client.Jar, err = cookiejar.New(jarOpts)
+	if err != nil {
+		return nil
+	}
 	return f
 }
 
-// Fetch retrieves document from the remote server. It returns web page content along with cache and expiration information.
-func (f *ChromeFetcher) Fetch(request Request) (*http.Response, error) {
-	//URL validation
-	if _, err := url.ParseRequestURI(strings.TrimSpace(request.getURL())); err != nil {
-		return nil, err
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+func NewCdpContext(timeout int) (context.Context, context.CancelFunc) {
+	// Use a executive allocator to use chrome with head
+	ctx, cancel := chromedp.NewExecAllocator(context.Background(), append(chromedp.DefaultExecAllocatorOptions[:], chromedp.Flag("headless", false))...)
 
-	// Context Creation + Devtool creation
-	devt := devtool.New(viper.GetString("CHROME"), devtool.WithClient(f.client))
-	//https://github.com/mafredri/cdp/issues/60
-	//pt, err := devt.Get(ctx, devtool.Page)
-	pt, err := devt.Create(ctx)
-	if err != nil {
-		return nil, err
-	}
+	ctx, cancel = chromedp.NewContext(
+		ctx,
+		// chromedp.WithDebugf(log.Printf),
+	)
 
-	//#TODO: Understand what this means, what is CONN? And what does RPCC mean in this case?
-	var conn *rpcc.Conn
-	if viper.GetBool("CHROME_TRACE") {
-		newLogCodec := func(conn io.ReadWriter) rpcc.Codec {
-			return &LogCodec{conn: conn}
-		}
-		// Connect to WebSocket URL (page) that speaks the Chrome Debugging Protocol.
-		conn, err = rpcc.DialContext(
-			ctx, pt.WebSocketDebuggerURL, rpcc.WithCodec(newLogCodec))
-	} else {
-		conn, err = rpcc.DialContext(ctx, pt.WebSocketDebuggerURL)
-	}
-	if err != nil {
-		fmt.Println(err)
-		return nil, err
-	}
-	defer conn.Close() // Cleanup.
-	defer devt.Close(ctx, pt)
+	// create a timeout
+	ctx, cancel = context.WithTimeout(ctx, time.Duration(timeout)*time.Second)
 
-	// Create a new CDP Client that uses conn.
-	f.cdpClient = cdp.NewClient(conn)
-
-	if err = runBatch(
-		// Enable all the domain events that we're interested in.
-		func() error { return f.cdpClient.DOM.Enable(ctx, nil) },
-		func() error { return f.cdpClient.Network.Enable(ctx, nil) },
-		func() error { return f.cdpClient.Page.Enable(ctx) },
-		func() error { return f.cdpClient.Runtime.Enable(ctx) },
-	); err != nil {
-		return nil, err
-	}
-
-	err = f.loadCookies()
-	if err != nil {
-		return nil, err
-	}
-
-	domLoadTimeout := 60 * time.Second
-	if request.FormData == "" {
-		err = f.navigate(ctx, f.cdpClient.Page, "GET", request.getURL(), "", domLoadTimeout)
-	} else {
-		formData := parseFormData(request.FormData)
-		err = f.navigate(ctx, f.cdpClient.Page, "POST", request.getURL(), formData.Encode(), domLoadTimeout)
-	}
-	if err != nil {
-		return nil, err
-	}
-
-	// Q: Huh, we are not killing it here eh? Why not return, instead just warn?
-	if err := f.runActions(ctx, request.Actions); err != nil {
-		log.Warn(err.Error())
-	}
-
-	u, err := url.Parse(request.getURL())
-	if err != nil {
-		return nil, err
-	}
-	f.cookies, err = f.saveCookies(u, &ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	// // Fetch the document root node. We can pass nil here
-	// // since this method only takes optional arguments.
-	// doc, err := f.cdpClient.DOM.GetDocument(ctx, nil)
-	// if err != nil {
-	// 	return nil, err
-	// }
-
-	// // Get the outer HTML for the page.
-	// result, err := f.cdpClient.DOM.GetOuterHTML(ctx, &dom.GetOuterHTMLArgs{
-	// 	NodeID: &doc.Root.NodeID,
-	// })
-	// if err != nil {
-	// 	return nil, err
-	// }
-	// readCloser := ioutil.NopCloser(strings.NewReader(result.OuterHTML))
-
-	// #TODO: Understand scrapper better. Do we return *http.response or io.ReaderCloser
-	// in fetcher.Fetch?
-	return nil, nil
-
+	return ctx, cancel
 }
 
-func (f *ChromeFetcher) runActions(ctx context.Context, actionsJSON string) error {
-	if len(actionsJSON) == 0 {
-		return nil
+// You give me Selector string & place to save it, I give u the corresponding action
+// func actionGrabHTMLToSelection(selector string, placeToSave *[]*cdp.Node) *chromedp.Tasks {
+// 	return &chromedp.Tasks{
+// 		chromedp.WaitVisible(selector),
+// 		chromedp.Nodes(selector, placeToSave),
+// 	}
+// }
+
+func (cf *ChromeFetcher) Fetch(request Request) (*http.Response, error) {
+	chromeContext, cancelContext := NewCdpContext(40)
+	defer cancelContext()
+
+	var response string
+	var statusCode int64
+	var responseHeaders map[string]interface{}
+	url := request.URL
+
+	runError := chromedp.Run(
+		chromeContext,
+		chromeTask(
+			chromeContext, url,
+			request.Header,
+			&response, &statusCode, &responseHeaders))
+
+	if runError != nil {
+		panic(runError)
 	}
-	acts := []map[string]json.RawMessage{}
-	err := json.Unmarshal([]byte(actionsJSON), &acts)
+
+	// fmt.Printf(
+	// 	"\n\n{%s}\n\n > %s\n status: %d\nheaders: %s\n\n",
+	// 	response, url, statusCode, responseHeaders,
+	// )
+
+	// we have the responseBody, status code, and response headers now!
+	composedResponse := http.Response{}
+	composedResponse.Body = io.NopCloser(strings.NewReader(response))
+	composedResponse.Header = request.Header
+	composedResponse.Status = fmt.Sprint(statusCode)
+	composedURL, err := neturl.Parse(url)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	for _, actionMap := range acts {
-		for actionType, params := range actionMap {
-			action, err := NewAction(actionType, params)
-			if err == nil {
-				return action.Execute(ctx, f)
+	composedResponseRequest := http.Request{
+		URL: composedURL,
+	}
+	composedResponse.Request = &composedResponseRequest
+
+	return &composedResponse, nil
+}
+
+func chromeTask(chromeContext context.Context, url string, requestHeaders http.Header, response *string, statusCode *int64, responseHeaders *map[string]interface{}) chromedp.Tasks {
+	chromedp.ListenTarget(chromeContext, func(event interface{}) {
+		switch responseReceivedEvent := event.(type) {
+		case *network.EventResponseReceived:
+			response := responseReceivedEvent.Response
+			if response.URL == url {
+				*statusCode = response.Status
+				*responseHeaders = response.Headers
 			}
 		}
-	}
-	return nil
-}
+	})
 
-func (f *ChromeFetcher) setCookieJar(jar http.CookieJar) {
-	f.client.Jar = jar
-}
-
-func (f *ChromeFetcher) getCookieJar() http.CookieJar {
-	return f.client.Jar
-}
-
-// Static type assertion
-var _ Fetcher = &ChromeFetcher{}
-
-// navigate to the URL and wait for DOMContentEventFired. An error is
-// returned if timeout happens before DOMContentEventFired.
-func (f *ChromeFetcher) navigate(ctx context.Context, pageClient cdp.Page, method, url string, formData string, timeout time.Duration) error {
-	defer time.Sleep(750 * time.Millisecond)
-
-	ctxTimeout, cancelTimeout := context.WithTimeout(context.Background(), timeout)
-
-	// Make sure Page events are enabled.
-	err := pageClient.Enable(ctxTimeout)
-	if err != nil {
-		return err
+	requestHeaderBase := map[string][]string(requestHeaders)
+	newRequestHeader := make(map[string]interface{})
+	for key, el := range requestHeaderBase {
+		newRequestHeader[key] = el
 	}
 
-	// Navigate to GitHub, block until ready.
-	loadEventFired, err := pageClient.LoadEventFired(ctxTimeout)
-	if err != nil {
-		return err
-	}
-	defer loadEventFired.Close()
-
-	loadingFailed, err := f.cdpClient.Network.LoadingFailed(ctxTimeout)
-	if err != nil {
-		return err
-	}
-	defer loadingFailed.Close()
-
-	// exceptionThrown, err := f.cdpClient.Runtime.ExceptionThrown(ctxTimeout)
-	// if err != nil {
-	// 	return err
-	// }
-	//defer exceptionThrown.Close()
-
-	if method == "GET" {
-		_, err = pageClient.Navigate(ctxTimeout, page.NewNavigateArgs(url))
-		if err != nil {
-			return err
-		}
-	} else {
-		/* ast := "*" */
-		pattern := network.RequestPattern{URLPattern: &url}
-		patterns := []network.RequestPattern{pattern}
-
-		f.cdpClient.Network.SetCacheDisabled(ctxTimeout, network.NewSetCacheDisabledArgs(true))
-
-		interArgs := network.NewSetRequestInterceptionArgs(patterns)
-		err = f.cdpClient.Network.SetRequestInterception(ctxTimeout, interArgs)
-		if err != nil {
-			return err
-		}
-
-		kill := make(chan bool)
-		go f.interceptRequest(ctxTimeout, url, formData, kill)
-		_, err = pageClient.Navigate(ctxTimeout, page.NewNavigateArgs(url))
-		if err != nil {
-			return err
-		}
-		kill <- true
-	}
-	select {
-	// case <-exceptionThrown.Ready():
-	// 	ev, err := exceptionThrown.Recv()
-	// 	if err != nil {
-	// 		return err
-	// 	}
-	// 	return errs.StatusError{400, errors.New(ev.ExceptionDetails.Error())}
-	case <-loadEventFired.Ready():
-		_, err = loadEventFired.Recv()
-		if err != nil {
-			return err
-		}
-	case <-loadingFailed.Ready():
-		reply, err := loadingFailed.Recv()
-		if err != nil {
-			return err
-		}
-		canceled := reply.Canceled != nil && *reply.Canceled
-		if !canceled && reply.Type == network.ResourceTypeDocument {
-			return errs.StatusError{400, errors.New(reply.ErrorText)}
-		}
-	case <-ctx.Done():
-		cancelTimeout()
-		return nil /*
-			case <-ctxTimeout.Done():
-				return errs.StatusError{400, errors.New("Fetch timeout")} */
-	}
-	return nil
-}
-
-func (f *ChromeFetcher) setCookies(u *url.URL, cookies []*http.Cookie) error {
-	f.cookies = cookies
-	return nil
-}
-
-func (f *ChromeFetcher) loadCookies() error {
-	/* 	u, err := url.Parse(cookiesURL)
-	   	if err != nil {
-	   		return err
-	   	} */
-	for _, c := range f.cookies {
-		c1 := network.SetCookieArgs{
-			Name:  c.Name,
-			Value: c.Value,
-			Path:  &c.Path,
-			/* Expires:  expire, */
-			Domain:   &c.Domain,
-			HTTPOnly: &c.HttpOnly,
-			Secure:   &c.Secure,
-		}
-		if !c.Expires.IsZero() {
-			duration := c.Expires.Sub(time.Unix(0, 0))
-			c1.Expires = network.TimeSinceEpoch(duration / time.Second)
-		}
-		_, err := f.cdpClient.Network.SetCookie(context.Background(), &c1)
-		if err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (f *ChromeFetcher) getCookies(u *url.URL) ([]*http.Cookie, error) {
-	return f.cookies, nil
-}
-
-func (f *ChromeFetcher) saveCookies(u *url.URL, ctx *context.Context) ([]*http.Cookie, error) {
-	ncookies, err := f.cdpClient.Network.GetCookies(*ctx, &network.GetCookiesArgs{URLs: []string{u.String()}})
-	if err != nil {
-		return nil, err
-	}
-	cookies := []*http.Cookie{}
-	for _, c := range ncookies.Cookies {
-
-		c1 := http.Cookie{
-			Name:  c.Name,
-			Value: c.Value,
-			Path:  c.Path,
-			/* Expires:  expire, */
-			Domain:   c.Domain,
-			HttpOnly: c.HTTPOnly,
-			Secure:   c.Secure,
-		}
-		if c.Expires > -1 {
-			sec, dec := math.Modf(c.Expires)
-			expire := time.Unix(int64(sec), int64(dec*(1e9)))
-			/* logger.Info(expire.String())
-			log.Info(expire.Format("2006-01-02 15:04:05")) */
-			c1.Expires = expire
-		}
-		cookies = append(cookies, &c1)
-		domain := string(c1.Domain)
-		Url := u.String()
-		f.cdpClient.Network.DeleteCookies(*ctx, &network.DeleteCookiesArgs{Name: c.Name, Domain: &domain, URL: &Url, Path: &c1.Path})
-	}
-	return cookies, nil
-}
-
-func (f *ChromeFetcher) interceptRequest(ctx context.Context, originURL string, formData string, kill chan bool) {
-	var sig = false
-	cl, err := f.cdpClient.Network.RequestIntercepted(ctx)
-	if err != nil {
-		panic(err)
-	}
-	defer cl.Close()
-	for {
-		if sig {
-			return
-		}
-		select {
-		case <-cl.Ready():
-			r, err := cl.Recv()
+	getResponseBody :=
+		chromedp.ActionFunc(func(ctx context.Context) error {
+			node, err := dom.GetDocument().Do(ctx)
 			if err != nil {
-				log.Error(err.Error())
-				sig = true
-				continue
+				return err
 			}
+			*response, err = dom.GetOuterHTML().WithNodeID(node.NodeID).Do(ctx)
 
-			lengthFormData := len(formData)
-			if lengthFormData > 0 && r.Request.URL == originURL && r.RedirectURL == nil {
+			return err
+		})
 
-				interceptedArgs := network.NewContinueInterceptedRequestArgs(r.InterceptionID).
-					SetMethod("POST").
-					SetPostData(formData)
-
-				headers, _ := json.Marshal(map[string]string{
-					"Content-Type":   "application/x-www-form-urlencoded",
-					"Content-Length": strconv.Itoa(lengthFormData),
-				})
-				interceptedArgs.Headers = headers
-
-				if err = f.cdpClient.Network.ContinueInterceptedRequest(ctx, interceptedArgs); err != nil {
-					log.Error(err.Error())
-					sig = true
-					continue
-				}
-			} else {
-				interceptedArgs := network.NewContinueInterceptedRequestArgs(r.InterceptionID)
-				if r.ResourceType == network.ResourceTypeImage || r.ResourceType == network.ResourceTypeStylesheet || isExclude(r.Request.URL) {
-					interceptedArgs.SetErrorReason(network.ErrorReasonAborted)
-				}
-				if err = f.cdpClient.Network.ContinueInterceptedRequest(ctx, interceptedArgs); err != nil {
-					log.Error(err.Error())
-					sig = true
-					continue
-				}
-				continue
-			}
-		case <-kill:
-			sig = true
-			break
-		}
+	return chromedp.Tasks{
+		network.Enable(),
+		network.SetExtraHTTPHeaders(network.Headers(newRequestHeader)),
+		chromedp.Navigate(url),
+		getResponseBody,
 	}
 }
 
-func (f ChromeFetcher) RunJSFromFile(ctx context.Context, path string, entryPointFunction string) error {
-	exp, err := ioutil.ReadFile(path)
-	if err != nil {
-		panic(err)
-	}
+func (cf *ChromeFetcher) getCookieJar() http.CookieJar                        { return nil }
+func (cf *ChromeFetcher) setCookieJar(jar http.CookieJar)                     {}
+func (cf *ChromeFetcher) getCookies(u *url.URL) ([]*http.Cookie, error)       { return nil, nil }
+func (cf *ChromeFetcher) setCookies(u *url.URL, cookies []*http.Cookie) error { return nil }
 
-	exp = append(exp, entryPointFunction...)
+// func (cf *ChromeFetcher) Fetch(request Request) (*http.Response, error) {
+// 	ctx, cancel := NewCdpContext(40)
+// 	cf.ctx = &ctx
+// 	defer cancel()
+// 	var nodes []*cdp.Node
 
-	compileReply, err := f.cdpClient.Runtime.CompileScript(ctx, &runtime.CompileScriptArgs{
-		Expression:    string(exp),
-		PersistScript: true,
-	})
-	if err != nil {
-		panic(err)
-	}
-	awaitPromise := true
+// 	// Timer Start
+// 	start := time.Now()
 
-	_, err = f.cdpClient.Runtime.RunScript(ctx, &runtime.RunScriptArgs{
-		ScriptID:     *compileReply.ScriptID,
-		AwaitPromise: &awaitPromise,
-	})
-	return err
-}
+// 	// Bucket of responses
+// 	responses := []*http.Response{}
+
+// 	listenForNetworkEvent(*cf.ctx, &responses)
+
+// 	err := chromedp.Run(*cf.ctx,
+// 		network.Enable(),
+// 		chromedp.Navigate(`https://www.austintexas.gov/cityclerk/boards_commissions/meetings/2017_15_1.htm`),
+// 		// wait for footer element is visible (ie, page is loaded)
+// 		// chromedp.WaitVisible(`.bcic_doc , b`),
+// 		// // Take the table HTML and save it somewhere
+// 		// actionGrabHTMLToSelection(`.bcic_doc , b`, &nodes),
+// 	)
+// 	t := time.Now()
+// 	fmt.Println("t at: ", t)
+
+// 	if err != nil {
+// 		log.Fatal(err)
+// 	}
+
+// 	end := time.Now()
+// 	fmt.Println("Ending at: ", end)
+// 	for _, el := range nodes {
+// 		fmt.Println(el.Dump("", "  ", false))
+// 	}
+
+// 	fmt.Printf("\nTook: %f secs\n", time.Since(start).Seconds())
+
+// }
+
+// func listenForNetworkEvent(ctx context.Context, responses *[]*http.Response) *http.Response {
+// 	chromedp.ListenTarget(ctx, func(ev interface{}) {
+// 		switch ev := ev.(type) {
+
+// 		case *network.EventResponseReceived:
+// 			resp := ev.Response
+// 			if len(resp.Headers) != 0 {
+// 				log.Printf("received headers: %s", resp.Headers)
+// 				responses = append(responses, &resp)
+// 			}
+
+// 		}
+// 		case *network.EventResponseReceived:
+// 			resp := ev.Response
+// 			if len(resp.Headers) != 0 {
+// 				log.Printf("received headers: %s", resp.Headers)
+// 				responses = append(responses, &resp)
+// 			}
+
+// 		}
+
+// 		// other needed network Event
+// 	})
+// }

@@ -1,6 +1,7 @@
 package scraper
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -11,22 +12,21 @@ import (
 	"github.com/ilyakaznacheev/cleanenv"
 	"github.com/jakopako/goskyr/output"
 	"github.com/jakopako/goskyr/utils"
-	"gopkg.in/yaml.v2"
 )
 
 // GlobalConfig is used for storing global configuration parameters that
 // are needed across all scrapers
 type GlobalConfig struct {
-	UserAgent string `yaml:"user-agent"`
+	UserAgent string `json:"user-agent"`
 }
 
 // Config defines the overall structure of the scraper configuration.
 // Values will be taken from a config yml file or environment variables
 // or both.
 type Config struct {
-	Writer   output.WriterConfig `yaml:"writer"`
-	Elements []Element           `yaml:"scrapers"`
-	Global   GlobalConfig        `yaml:"global"`
+	Writer   output.WriterConfig `json:"writer"`
+	Elements []Element           `json:"scrapers"`
+	Global   GlobalConfig        `json:"global"`
 }
 
 // Reads the YML config into config
@@ -43,7 +43,7 @@ func NewConfig(configPath string) (*Config, error) {
 		return nil, err
 	}
 	defer file.Close()
-	d := yaml.NewDecoder(file)
+	d := json.NewDecoder(file)
 	if err := d.Decode(&config); err != nil {
 		return nil, err
 	}
@@ -53,8 +53,8 @@ func NewConfig(configPath string) (*Config, error) {
 // RegexConfig is used for extracting a substring from a string based on the
 // given Exp and Index
 type RegexConfig struct {
-	Exp   string `yaml:"exp"`
-	Index int    `yaml:"index"`
+	Exp   string `json:"exp"`
+	Index int    `json:"index"`
 }
 
 // A DynamicField contains all the information necessary to scrape
@@ -63,68 +63,73 @@ type RegexConfig struct {
 
 // ElementLocation is used to find a specific string in a html document
 type ElementLocation struct {
-	Selector      string      `yaml:"selector"`
-	NodeIndex     int         `yaml:"node_index"`
-	ChildIndex    int         `yaml:"child_index"`
-	RegexExtract  RegexConfig `yaml:"regex_extract"`
-	Attr          string      `yaml:"attr"`
-	MaxLength     int         `yaml:"max_length"`
-	EntireSubtree bool        `yaml:"entire_subtree"`
+	Selector      string      `json:"selector"`
+	NodeIndex     int         `json:"node_index"`
+	ChildIndex    int         `json:"child_index"`
+	RegexExtract  RegexConfig `json:"regex_extract"`
+	Attr          string      `json:"attr"`
+	MaxLength     int         `json:"max_length"`
+	EntireSubtree bool        `json:"entire_subtree"`
 }
 
 // CoveredDateParts is used to determine what parts of a date a
 // DateComponent covers
 type CoveredDateParts struct {
-	Day   bool `yaml:"day"`
-	Month bool `yaml:"month"`
-	Year  bool `yaml:"year"`
-	Time  bool `yaml:"time"`
+	Day   bool `json:"day"`
+	Month bool `json:"month"`
+	Year  bool `json:"year"`
+	Time  bool `json:"time"`
 }
 
 // A DateComponent is used to find a specific part of a date within
 // a html document
 type DateComponent struct {
-	Covers          CoveredDateParts `yaml:"covers"`
-	ElementLocation ElementLocation  `yaml:"location"`
-	Layout          []string         `yaml:"layout"`
+	Covers          CoveredDateParts `json:"covers"`
+	ElementLocation ElementLocation  `json:"location"`
+	Layout          []string         `json:"layout"`
 }
 
 // A StaticField defines a field that has a fixed name and value
 // across all scraped items
 type StaticField struct {
-	Name  string `yaml:"name"`
-	Value string `yaml:"value"`
+	Name  string `json:"name"`
+	Value string `json:"value"`
 }
 
 // A Filter is used to filter certain items from the result list
 type Filter struct {
-	Field string `yaml:"field"`
-	Regex string `yaml:"regex"`
-	Match bool   `yaml:"match"`
+	Field string `json:"field"`
+	Regex string `json:"regex"`
+	Match bool   `json:"match"`
 }
 
 // A Element contains all the necessary config parameters and structs needed
 // to extract the desired information from a website
 
 // A "Scraper" is just a Element with a starting URL
+type Action interface {
+}
+
 type Element struct {
-	Name                string          `yaml:"name"`
-	URL                 string          `yaml:"url"`
-	Type                string          `yaml:"type"` // can currently be text, url or date
-	ElementLocation     ElementLocation `yaml:"location"`
-	RecurLocation       ElementLocation `yaml:"recur_location"`
-	ExcludeWithSelector []string        `yaml:"exclude_with_selector"`
-	CanBeEmpty          bool            `yaml:"can_be_empty"` // applies to text, url
-	Hide                bool            `yaml:"hide"`         // appliess to text, url, date
+	Name                string          `json:"name"`
+	URL                 string          `json:"url"`
+	Type                string          `json:"type"` // can currently be text, url or date
+	ElementLocation     ElementLocation `json:"location"`
+	RecurLocation       ElementLocation `json:"recur_location"`
+	ExcludeWithSelector []string        `json:"exclude_with_selector"`
+	CanBeEmpty          bool            `json:"can_be_empty"` // applies to text, url
+	Hide                bool            `json:"hide"`         // appliess to text, url, date
+
+	Actions []Action `json:jfdisjfdsijfisd`
 
 	Fields struct {
-		Static  []StaticField `yaml:"statics"`
-		Element []Element     `yaml:"elements"`
-	} `yaml:"fields"`
-	Filters   []Filter `yaml:"filters"`
+		Static  []StaticField `json:"statics"`
+		Element []Element     `json:"elements"`
+	} `json:"fields"`
+	Filters   []Filter `json:"filters"`
 	Paginator struct {
-		Location ElementLocation `yaml:"location"`
-		MaxPages int             `yaml:"max_pages"`
+		Location ElementLocation `json:"location"`
+		MaxPages int             `json:"max_pages"`
 	}
 }
 

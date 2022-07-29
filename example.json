@@ -32,7 +32,6 @@
             ],
             "type": "SelectorText",
             "selector": "span.a-size-medium",
-            "multiple": false,
             "delay": 0,
             "regex": ""
         },

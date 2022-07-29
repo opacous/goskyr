@@ -1,0 +1,58 @@
+{
+    "scrapers": [
+        {
+            "name": "TOP DOG",
+            "url": "https://webscraper.io/test-sites/e-commerce/allinone/phones",
+            "location": {
+                "selector": "body > div.wrapper > div.container.test-site > div > div.col-md-9 > div.row > div:nth-child(n) > div"
+            },
+            "fields": {
+                "elements": [
+                    {
+                        "name": "field-0",
+                        "type": "text",
+                        "location": {
+                            "selector": "div.caption > p"
+                        }
+                    },
+                    {
+                        "name": "field-1",
+                        "type": "text",
+                        "location": {
+                            "selector": "div.caption > h4.pull-right.price"
+                        }
+                    },
+                    {
+                        "name": "field-2",
+                        "type": "text",
+                        "location": {
+                            "selector": "div.caption > h4:nth-child(2) > a"
+                        }
+                    },
+                    {
+                        "name": "link-1",
+                        "type": "url",
+                        "url": "",
+                        "location": {
+                            "selector": "div.caption > h4:nth-child(2) > a"
+                        },
+                        "recur_location": {
+                            "selector": "body > div.wrapper"
+                        },
+                        "fields": {
+                            "elements": [
+                                {
+                                    "name": "reviews-0",
+                                    "type": "text",
+                                    "location": {
+                                        "selector": "div.container.test-site > div > div.col-md-9 > div > div > div.col-lg-10 > div.ratings > p"
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                ]
+            }
+        }
+    ]
+}

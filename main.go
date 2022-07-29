@@ -31,7 +31,7 @@ func runScraper(s scraper.Element, itemsChannel chan map[string]interface{}, glo
 func main() {
 	singleScraper := flag.String("single", "", "The name of the scraper to be run.")
 	toStdout := flag.Bool("stdout", false, "If set to true the scraped data will be written to stdout despite any other existing writer configurations.")
-	configFile := flag.String("config", "./config.yml", "The location of the configuration file.")
+	configFile := flag.String("config", "./config.json", "The location of the configuration file.")
 	printVersion := flag.Bool("version", false, "The version of goskyr.")
 	// add flag to pass min nr of items for the generate flag.
 	// #TODO: Temporarily disabled generateConfig

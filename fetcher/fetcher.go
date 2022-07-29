@@ -54,6 +54,10 @@ type Request struct {
 	//	HTTP method : GET, POST
 	Method string
 
+	// Header contains the request header fields either received
+	// by the server or to be sent by the client.
+	Header http.Header
+
 	// FormData is a string value for passing formdata parameters.
 	// For example it may be used for processing pages which require authentication
 	// Example:
@@ -66,6 +70,10 @@ type Request struct {
 	// Actions contains the list of action we have to perform on page
 	Actions string `json:"actions"`
 }
+
+// type Fetcher interface {
+// 	fetche(requests)
+// }
 
 //newFetcher creates instances of Fetcher for downloading a web page.
 func NewFetcher(t Type) Fetcher {
