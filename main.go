@@ -14,15 +14,15 @@ var version = "dev"
 
 func runScraper(s scraper.Element, itemsChannel chan map[string]interface{}, globalConfig *scraper.GlobalConfig, wg *sync.WaitGroup) {
 	defer wg.Done()
-	log.Printf("crawling %s\n", s.Name)
+	log.Printf("crawling %s\n", s.Id)
 	// This could probably be improved. We could pass the channel to
 	// GetItems instead of waiting for the scraper to finish.
-	items, err := s.CallRecursiveElements(globalConfig, "")
+	items, err := s.Call(globalConfig, nil, "", nil, nil)
 	if err != nil {
-		log.Printf("%s ERROR: %s", s.Name, err)
+		log.Printf("%s ERROR: %s", s.Id, err)
 		return
 	}
-	log.Printf("fetched %d %s events\n", len(items), s.Name)
+	log.Printf("fetched %d %s events\n", len(items), s.Id)
 	for _, item := range items {
 		itemsChannel <- item
 	}
@@ -92,11 +92,12 @@ func main() {
 
 	for _, s := range config.Elements {
 		fmt.Printf("%+v\n", s)
-		if *singleScraper == "" || *singleScraper == s.Name {
+		if *singleScraper == "" || *singleScraper == s.Id {
 			scraperWg.Add(1)
 			go runScraper(s, itemsChannel, &config.Global, &scraperWg)
 		}
 	}
+
 	writerWg.Add(1)
 	go writer.Write(itemsChannel, &writerWg)
 	scraperWg.Wait()
